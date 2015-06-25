@@ -938,16 +938,15 @@ void xar_prop_serialize(xar_prop_t p, xmlTextWriterPtr writer) {
 		if( XAR_PROP(i)->value ) {
 			if( strcmp(XAR_PROP(i)->key, "name") == 0 ) {
 				unsigned char *tmp;
-				int outlen = strlen(XAR_PROP(i)->value);
+				size_t outlen = strlen(XAR_PROP(i)->value);
 				int inlen, len;
-
 				inlen = len = outlen;
 
 				tmp = malloc(len);
 				assert(tmp);
 				if( UTF8Toisolat1(tmp, &len, BAD_CAST(XAR_PROP(i)->value), &inlen) < 0 ) {
 					xmlTextWriterWriteAttribute(writer, BAD_CAST("enctype"), BAD_CAST("base64"));
-					xmlTextWriterWriteBase64(writer, XAR_PROP(i)->value, 0, strlen(XAR_PROP(i)->value));
+					xmlTextWriterWriteBase64(writer, XAR_PROP(i)->value, 0, outlen);
 				} else
 					xmlTextWriterWriteString(writer, BAD_CAST(XAR_PROP(i)->value));
 				free(tmp);

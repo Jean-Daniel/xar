@@ -119,7 +119,7 @@ struct datamod xar_datamods[] = {
 };
 
 size_t xar_io_get_rsize(xar_t x) {
-	size_t bsize;
+	ssize_t bsize;
 	const char *opt = NULL;
 
 	opt = xar_opt_get(x, "rsize");
@@ -129,7 +129,9 @@ size_t xar_io_get_rsize(xar_t x) {
 		bsize = strtol(opt, NULL, 0);
 		if( ((bsize == LONG_MAX) || (bsize == LONG_MIN)) && (errno == ERANGE) ) {
 			bsize = 4096;
-		}
+		} else if( bsize <= 0 ) {
+      bsize = 4096;
+    }
 	}
 
 	return bsize;
@@ -438,8 +440,6 @@ int32_t xar_attrcopy_from_heap(xar_t x, xar_file_t f, xar_prop_t p, write_callba
 	size_t bsize, def_bsize;
 	int64_t fsize, inc = 0, seekoff;
 	void *inbuf;
-	const char *opt;
-	xar_prop_t tmpp;
 
 	memset(modulecontext, 0, sizeof(void*)*modulecount);
 

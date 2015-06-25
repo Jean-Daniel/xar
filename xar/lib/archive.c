@@ -423,9 +423,9 @@ int xar_close(xar_t x) {
 
 	/* If we're creating an archive */
 	if( XAR(x)->heap_fd != -1 ) {
-		char *tmpser;
+		const char *tmpser;
 		void *rbuf, *wbuf = NULL;
-		int fd, r, off, wbytes, rbytes;
+		int fd, r, off, wbytes;
 		long rsize, wsize;
 		z_stream zs;
 		uint64_t ungztoc, gztoc;
@@ -434,7 +434,7 @@ int xar_close(xar_t x) {
 		struct tm tmptm;
 		time_t t;
 
-		tmpser = (char *)xar_opt_get(x, XAR_OPT_TOCCKSUM);
+		tmpser = (const char *)xar_opt_get(x, XAR_OPT_TOCCKSUM);
 		/* If no checksum type is specified, default to sha1 */
 		if( !tmpser ) tmpser = XAR_OPT_VAL_SHA1;
 
@@ -477,15 +477,16 @@ int xar_close(xar_t x) {
 		xar_prop_set(XAR_FILE(x), "creation-time", timestr);
 		
 		/* serialize the toc to a tmp file */
-		asprintf(&tmpser, "%s/xar.toc.XXXXXX", XAR(x)->dirname);
-		fd = mkstemp(tmpser);
-		xar_serialize(x, tmpser);
-		unlink(tmpser);
-		free(tmpser);
-		asprintf(&tmpser, "%s/xar.toc.XXXXXX", XAR(x)->dirname);
-		tocfd = mkstemp(tmpser);
-		unlink(tmpser);
-		free(tmpser);
+    char *tmpfile;
+		asprintf(&tmpfile, "%s/xar.toc.XXXXXX", XAR(x)->dirname);
+		fd = mkstemp(tmpfile);
+		xar_serialize(x, tmpfile);
+		unlink(tmpfile);
+		free(tmpfile);
+		asprintf(&tmpfile, "%s/xar.toc.XXXXXX", XAR(x)->dirname);
+		tocfd = mkstemp(tmpfile);
+		unlink(tmpfile);
+		free(tmpfile);
 		
 	
 		/* read the toc from the tmp file, compress it, and write it
@@ -746,7 +747,7 @@ const char *xar_opt_get(xar_t x, const char *option) {
  * Returns: 0 for sucess, -1 for failure
  */
 int32_t xar_opt_set(xar_t x, const char *option, const char *value) {
-	xar_attr_t currentAttr, a;
+	xar_attr_t a;
 
 	if( (strcmp(option, XAR_OPT_TOCCKSUM) == 0) ) {
 		XAR(x)->heap_offset = xar_io_get_toc_checksum_length_for_type(value);
@@ -941,7 +942,7 @@ static xar_file_t xar_add_pseudodir(xar_t x, xar_file_t f, const char *name, con
 	} else {
 		path = XAR_FILE(f)->fspath;
 		if( strcmp(prefix, "../") == 0 ) {
-			int len1, len2;
+			size_t len1, len2;
 			len1 = strlen(path);
 			len2 = strlen(name);
 			if( (len1>=len2) && (strcmp(path+(len1-len2), name) == 0) ) {
