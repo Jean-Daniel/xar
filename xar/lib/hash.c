@@ -43,7 +43,7 @@
 #include <zlib.h>
 #ifdef __APPLE__
 #include <CommonCrypto/CommonDigest.h>
-#include <CommonCrypto/CommonDigestSPI.h>
+#include "CommonDigestSPI.h"
 #else
 #include <openssl/evp.h>
 #endif
