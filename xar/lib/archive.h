@@ -40,11 +40,20 @@
 #define _XAR_ARCHIVE_H_
 #include <zlib.h>
 #include <libxml/hash.h>
+#ifdef __APPLE__
+#include <CommonCrypto/CommonDigest.h>
+#include <CommonCrypto/CommonDigestSPI.h>
+#else
 #include <openssl/evp.h>
+#endif
 #include <sys/types.h>
 #include <sys/stat.h>
 #include "xar.h"
 #include "filetree.h"
+#include "hash.h"
+
+typedef int (*read_callback)(xar_t, xar_file_t, void *, size_t, void *context);
+typedef int (*write_callback)(xar_t, xar_file_t, void *, size_t, void *context);
 
 struct errctx {
 	const char *str;
@@ -80,12 +89,14 @@ struct __xar_t {
 	struct errctx errctx;   /* error callback context */
 	xar_subdoc_t subdocs;   /* linked list of subdocs */
 	xar_signature_t signatures; /* linked list of signatures */
+	int32_t (*attrcopy_to_heap)(xar_t, xar_file_t, xar_prop_t, read_callback, void *);
+	int32_t (*attrcopy_from_heap)(xar_t, xar_file_t, xar_prop_t, write_callback, void *);
+	int32_t (*heap_to_archive)(xar_t);
 	uint64_t last_fileid;       /* unique fileid's in the archive */
 	xmlHashTablePtr ino_hash;   /* Hash for looking up hardlinked files (add)*/
 	xmlHashTablePtr link_hash;  /* Hash for looking up hardlinked files (extract)*/
 	xmlHashTablePtr csum_hash;  /* Hash for looking up checksums of files */
-	EVP_MD_CTX toc_ctx;
-	int docksum;
+	xar_hash_t toc_hash_ctx;
 	int skipwarn;
 	struct stat sbcache;
 };

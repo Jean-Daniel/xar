@@ -36,11 +36,13 @@
 */
 
 #include <stdio.h>
+#include <stdint.h>
 #include <sys/types.h>
 #include <arpa/inet.h>
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <time.h>
 #include "config.h"
 #ifndef HAVE_ASPRINTF
 #include "asprintf.h"
@@ -48,6 +50,8 @@
 #include "xar.h"
 #include "archive.h"
 #include "filetree.h"
+
+
 
 uint64_t xar_ntoh64(uint64_t num) {
 	int t = 1234;
@@ -102,7 +106,7 @@ char *xar_get_path(xar_file_t f) {
 	return ret;
 }
 
-off_t	xar_get_heap_offset(xar_t x) {
+off_t xar_get_heap_offset(xar_t x) {
 	return XAR(x)->toc_count + sizeof(xar_header_t);
 }
 
@@ -111,37 +115,91 @@ off_t	xar_get_heap_offset(xar_t x) {
  * buffer.  This simple wrapper just handles certain retryable error situations.
  * Returns -1 when it fails fatally; the number of bytes read otherwise.
  */
-ssize_t xar_read_fd( int fd, void * buffer, size_t nbytes ) {
+ssize_t xar_read_fd( int fd, void * buffer, size_t nbyte ) {
 	ssize_t rb;
-	ssize_t off = 0;
+	ssize_t total = 0;
 
-	while ( off < nbytes ) {
-		rb = read(fd, ((char *)buffer)+off, nbytes-off);
-		if( (rb < 1 ) && (errno != EINTR) && (errno != EAGAIN) )
-			return -1;
-		off += rb;
+	while ( total < nbyte ) {
+		rb = read(fd, ((char *)buffer)+total, nbyte-total);
+		if( rb == 0 ) {
+			return total;
+		} else if( rb < 0 ) {
+			if( (errno == EINTR) || (errno == EAGAIN) )
+				continue;
+			return rb;
+		}
+		total += rb;
 	}
 
-	return off;
+	return total;
+}
+
+/* xar_pread_fd
+ * Summary: Does the same as xar_read_fd, but uses pread(2) instead of read(2).
+ */
+ssize_t xar_pread_fd(int fd, void * buffer, size_t nbyte, off_t offset) {
+	ssize_t rb;
+	ssize_t total = 0;
+	
+	while ( total < nbyte ) {
+		rb = pread(fd, ((char *)buffer)+total, nbyte-total, offset+total);
+		if( rb == 0 ) {
+			return total;
+		} else if( rb < 0 ) {
+			if( (errno == EINTR) || (errno == EAGAIN) )
+				continue;
+			return rb;
+		}
+		total += rb;
+	}
+	
+	return total;
 }
 
 /* xar_write_fd
  * Summary: Writes from a buffer to a file descriptor.  Like xar_read_fd it
  * also just handles certain retryable error situations.
- * Returs -1 when it fails fatally; the number of bytes written otherwise.
+ * Returns -1 when it fails fatally; the number of bytes written otherwise.
  */
-ssize_t xar_write_fd( int fd, void * buffer, size_t nbytes ) {
+ssize_t xar_write_fd( int fd, void * buffer, size_t nbyte ) {
 	ssize_t rb;
-	ssize_t off = 0;
+	ssize_t total = 0;
 
-	while ( off < nbytes ) {
-		rb = write(fd, ((char *)buffer)+off, nbytes-off);
-		if( (rb < 1 ) && (errno != EINTR) && (errno != EAGAIN) )
-			return -1;
-		off += rb;
+	while ( total < nbyte ) {
+		rb = write(fd, ((char *)buffer)+total, nbyte-total);
+		if( rb == 0 ) {
+			return total;
+		} else if( rb < 0 ) {
+			if( (errno == EINTR) || (errno == EAGAIN) )
+				continue;
+			return rb;
+		}
+		total += rb;
 	}
 
-	return off;
+	return total;
+}
+
+/* xar_pwrite_fd
+ * Summary: Does the same as xar_write_fd, but uses pwrite(2) instead of write(2).
+ */
+ssize_t xar_pwrite_fd( int fd, void * buffer, size_t nbyte, off_t offset ) {
+	ssize_t rb;
+	size_t total = 0;
+	
+	while( total < nbyte ) {
+		rb = pwrite(fd, ((char *)buffer)+total, nbyte-total, offset+total);
+		if( rb == 0 ) {
+			return total;
+		} else if( rb < 0 ) {
+			if( (errno == EINTR) || (errno == EAGAIN) )
+				continue;
+			return rb;
+		}
+		total += rb;
+	}
+	
+	return total;
 }
 
 dev_t xar_makedev(uint32_t major, uint32_t minor)
@@ -167,6 +225,67 @@ void xar_devmake(dev_t dev, uint32_t *out_major, uint32_t *out_minor)
 #endif
 	return;
 }
+
+char* xar_path_nextcomponent(char** path_to_advance) {
+	char* component_start = *path_to_advance;
+	unsigned int component_length = 1;
+	char* out_component = NULL;
+	
+	if (**path_to_advance == '\0') // If we're trying to look at the end of the path, punt
+		return NULL;
+		
+	for (; **path_to_advance && (**path_to_advance != '/'); ++(*path_to_advance), ++component_length) {
+		if (**path_to_advance == '\\') {	// Escape ignores next char
+			++(*path_to_advance);
+			++component_length;
+			continue;
+		}
+	}
+	
+	if (**path_to_advance == '/') {
+		++(*path_to_advance);
+	}
+	
+	out_component = (char*)malloc(component_length);
+	strncpy(out_component, component_start, component_length);
+	
+	out_component[component_length-1] = 0;
+	
+	return out_component;
+}
+		
+
+int xar_path_issane(char* path) {
+	char* path_walker = path;
+	char* component = NULL;
+	int path_depth = 0;
+	
+	// Ban 0 length / absolute paths.
+	if (strlen(path) == 0 || path[0] == '/')
+		return 0;
+	
+	while ((component = xar_path_nextcomponent(&path_walker))) {
+		
+		if (strlen(component) == 0 || strcmp(component, ".") == 0) { // Since // is legal, and '.' is legal it's possible to have empty path elements. Ignore them
+			free(component);
+			continue;
+		}
+		
+		if (strcmp(component, ".."))
+			++path_depth;
+		else
+			--path_depth;
+	
+		free(component);
+
+		if (path_depth < 0)	// We've escaped our root, this path is not sane.
+			return 0;
+	}
+	
+	return 1;
+}
+
+
 
 
 #ifndef HAVE_STRMODE

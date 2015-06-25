@@ -49,7 +49,15 @@ int main(int argc, char* argv[]) {
  *
  * *John Viega and Matt Messier, O'Reilly, 2003
  *  http://www.secureprogramming.com/
+ *
+ * Readability improvements by Luke Bellandi, 2007 (luke@apple.com)
  */
+
+typedef enum _B64CommandCodes {
+	B64_NullTerminator		= -3,
+	B64_PaddingCharacter	= -2,
+	B64_IgnorableCharacter	= -1
+} B64CommandCodes;
 
 static char b64revtb[256] = {
   -3, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, /*0-15*/
@@ -70,76 +78,129 @@ static char b64revtb[256] = {
   -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1  /*240-255*/
 };
 
+typedef enum _B64CodecErrorCodes {
+	B64_noError			= 0,
+	B64_decodeError		= 1,
+	B64_bufferOverrun	= 2
+} B64CodecErrorCodes;
+
+#define B64_INPUT_BLOCK_OFFSET	((inputIndex - 1 - ignorableCharacterCount) % 4)
+
 static unsigned int raw_base64_decode(
-  const unsigned char *input, unsigned char *output, int len)
+  const unsigned char *input, unsigned char *output, size_t inLengthToDecode,
+  size_t *outputDecodedLength)
 {
-
-    unsigned int  x, i = 0, ignr = 0;
-    unsigned char buf[3], pad = 0;
-
-    while (i < len || !pad) {
-        x = b64revtb[input[i++]];
-        switch (x) {
-            case -3: /* NULL TERMINATOR */
-                if ((i - ignr - 1) % 4) return 1;
-                return 0;
-            case -2: /* PADDING CHARACTER */
-                if ((i - ignr - 1) % 4 < 2) {
-                    /* Invalid here */
-                    return 1;
-                } else if ((i - ignr - 1) % 4 == 2) {
+    int currentBase64Value;
+	unsigned int inputIndex = 0;
+	unsigned int ignorableCharacterCount = 0;
+	unsigned int i;
+    unsigned char decodedBuffer[3];
+	unsigned char currentInputBlockPaddingCharacterCount = 0;
+	size_t *decodedCharacterCount;
+	size_t dummyValue;
+	
+	if (outputDecodedLength == NULL) {
+		// do this so that if caller passes in NULL for outputDecodedLength
+		// it can still be handled easily
+		decodedCharacterCount = &dummyValue;
+	} else {
+		decodedCharacterCount = outputDecodedLength;
+	}
+	*decodedCharacterCount = 0;
+	
+    while ( (inputIndex <= inLengthToDecode) &&
+			(currentInputBlockPaddingCharacterCount == 0) )
+	{
+        currentBase64Value = b64revtb[input[inputIndex]];
+		inputIndex++;
+		
+        switch (currentBase64Value) {
+			// [1] Handle control characters
+            case B64_NullTerminator:
+                if (B64_INPUT_BLOCK_OFFSET != 0) return B64_decodeError;
+				// copy remaining characters with padding
+				if (currentInputBlockPaddingCharacterCount > 0) {
+				    for (i = 0; i < (3 - currentInputBlockPaddingCharacterCount); i++) {
+						*output++ = decodedBuffer[i];
+						(*decodedCharacterCount)++;
+					}
+				}
+                return B64_noError;
+			
+            case B64_PaddingCharacter:
+                if (B64_INPUT_BLOCK_OFFSET < 2) {
+                    /* Invalid here -- only characters 3 and/or 4 of the
+					   input block can be padding */
+                    return B64_decodeError;
+                } else if (B64_INPUT_BLOCK_OFFSET == 2) {
                     /* Make sure there's appropriate padding */
-                    if (input[i] != '=') return 1;
-                    buf[2] = 0;
-                    pad = 2;
+                    if (input[inputIndex] != '=') return B64_decodeError;
+                    decodedBuffer[2] = 0;
+                    currentInputBlockPaddingCharacterCount = 2;
                     break;
                 } else {
-                    pad = 1;
+                    currentInputBlockPaddingCharacterCount = 1;
                     break;
                 }
-                return 0;
-            case -1:
-                ignr++;
+                return B64_noError;
+			
+            case B64_IgnorableCharacter:
+                ignorableCharacterCount++;
                 break;
+			
             default:
-                switch ((i - ignr - 1) % 4) {
+				// [2] Handle encoded data
+                switch (B64_INPUT_BLOCK_OFFSET) {
                     case 0:
-                        buf[0] = x << 2;
+                        decodedBuffer[0] = currentBase64Value << 2;
                         break;
                     case 1:
-                        buf[0] |= (x >> 4);
-                        buf[1] = x << 4;
+                        decodedBuffer[0] |= (currentBase64Value >> 4);
+                        decodedBuffer[1] = currentBase64Value << 4;
                         break;
                     case 2:
-                        buf[1] |= (x >> 2);
-                        buf[2] = x << 6;
+                        decodedBuffer[1] |= (currentBase64Value >> 2);
+                        decodedBuffer[2] = currentBase64Value << 6;
                         break;
                     case 3:
-                        buf[2] |= x;
-                        for (x = 0;  x < 3 - pad;  x++) *output++ = buf[x];
+                        decodedBuffer[2] |= currentBase64Value;
+                        for (i = 0; i < (3 - currentInputBlockPaddingCharacterCount); i++) {
+							*output++ = decodedBuffer[i];
+							(*decodedCharacterCount)++;
+						}
                         break;
                 }
                 break;
         }
     }
-    if (i > len) return 2;
-    for (x = 0;  x < 3 - pad;  x++) *output++ = buf[x];
-    return 0;
+	
+    if (inputIndex > inLengthToDecode) return B64_bufferOverrun;
+	
+    for (i = 0; i < (3 - currentInputBlockPaddingCharacterCount); i++) {
+		*output++ = decodedBuffer[i];
+		(*decodedCharacterCount)++;
+	}
+	
+    return B64_noError;
 }
 
-unsigned char* xar_from_base64(const unsigned char* input, int len)
+unsigned char* xar_from_base64(const unsigned char* input, size_t inputLength, size_t *outputLength)
 {
     int err;
     unsigned char *output;
 
-    output = malloc(3 * (len / 4 + 1));
-    if (!output) return NULL;
+	// N.B.: This is a conservative estimate of space needed.  It is NOT
+	// an exact value -- the exact length of the decoded data will be
+	// calculated during the decode operation.
+    output = malloc(3 * (inputLength / 4 + 1));
+    if (output == NULL) return NULL;
 
-    err = raw_base64_decode(input, output, len);
+    err = raw_base64_decode(input, output, inputLength, outputLength);
 
-    if (err) {
+    if (err != B64_noError) {
         free(output);
         return NULL;
     }
+	
     return output;
 }

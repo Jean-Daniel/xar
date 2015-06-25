@@ -41,7 +41,7 @@
 #define XAR_VERSION "@XAR_VERSION@"
 
 #include <sys/types.h>
-@C99_FIXED_WIDTH_TYPE_HEADER@
+#include <stdint.h>
 #include <sys/stat.h>
 
 #pragma pack(4)
@@ -63,6 +63,8 @@ typedef struct xar_header xar_header_t;
 #define XAR_CKSUM_NONE   0
 #define XAR_CKSUM_SHA1   1
 #define XAR_CKSUM_MD5    2
+#define XAR_CKSUM_SHA256 3
+#define XAR_CKSUM_SHA512 4
 
 typedef void *xar_errctx_t;
 typedef const struct __xar_file_t *xar_file_t;
@@ -98,23 +100,24 @@ typedef int32_t (*xar_signer_callback)(xar_signature_t sig, void *context, uint8
 #define XAR_OPT_VAL_SYMBOLIC "symbolic"   /* set owner/group based on names */
 #define XAR_OPT_VAL_NUMERIC  "numeric"    /* set owner/group based on uid/gid */
 
-#define XAR_OPT_TOCCKSUM	"toc-cksum"      /* set the toc checksum algorithm */
-#define XAR_OPT_FILECKSUM	"file-chksum"	/* set the file checksum algorithm */
-#define XAR_OPT_VAL_NONE "none"
-#define XAR_OPT_VAL_SHA1 "sha1"
-#define XAR_OPT_VAL_MD5  "md5"
+#define XAR_OPT_TOCCKSUM   "toc-cksum"      /* set the toc checksum algorithm */
+#define XAR_OPT_FILECKSUM  "file-chksum"	/* set the file checksum algorithm */
+#define XAR_OPT_VAL_NONE   "none"
+#define XAR_OPT_VAL_SHA1   "sha1"
+#define XAR_OPT_VAL_SHA256 "sha256"
+#define XAR_OPT_VAL_SHA512 "sha512"
+#define XAR_OPT_VAL_MD5    "md5"
 
 #define XAR_OPT_COMPRESSION    "compression" /* set the file compression type */
 #define XAR_OPT_COMPRESSIONARG "compression-arg" /* set the compression opts */
 #define XAR_OPT_VAL_GZIP       "gzip"
 #define XAR_OPT_VAL_BZIP       "bzip2"
 #define XAR_OPT_VAL_LZMA       "lzma"
-#define XAR_OPT_VAL_XZ         "xz"
 
 #define XAR_OPT_RSIZE          "rsize"       /* Read io buffer size */
 
-#define XAR_OPT_COALESCE       "coalesce"    /* Coalesce identical heap blocks */
-#define XAR_OPT_LINKSAME       "linksame"    /* Hardlink identical files */
+#define XAR_OPT_COALESCE         "coalesce"         /* Coalesce identical heap blocks */
+#define XAR_OPT_LINKSAME         "linksame"         /* Hardlink identical files */
 
 #define XAR_OPT_PROPINCLUDE    "prop-include" /* File property to include */
 #define XAR_OPT_PROPEXCLUDE    "prop-exclude" /* File property to exclude */
@@ -196,6 +199,8 @@ void xar_subdoc_remove(xar_subdoc_t s);
 
 /* signature api for adding various signature types */
 xar_signature_t xar_signature_new(xar_t x,const char *type, int32_t length, xar_signer_callback callback, void *callback_context);
+/* extended signatures are ignored by previous versions of xar */
+xar_signature_t xar_signature_new_extended(xar_t x,const char *type, int32_t length, xar_signer_callback callback, void *callback_context);
 
 const char *xar_signature_type(xar_signature_t s);
 
@@ -207,7 +212,7 @@ int32_t xar_signature_add_x509certificate(xar_signature_t sig, const uint8_t *ce
 int32_t xar_signature_get_x509certificate_count(xar_signature_t sig);
 int32_t xar_signature_get_x509certificate_data(xar_signature_t sig, int32_t index, const uint8_t **cert_data, uint32_t *cert_len);
 
-uint8_t xar_signature_copy_signed_data(xar_signature_t sig, uint8_t **data, uint32_t *length, uint8_t **signed_data, uint32_t *signed_length);
+uint8_t xar_signature_copy_signed_data(xar_signature_t sig, uint8_t **data, uint32_t *length, uint8_t **signed_data, uint32_t *signed_length, off_t *signed_offset);
 
 /* Helper functions - caller must free returned memory */
 char *xar_get_size(xar_t x, xar_file_t f);
@@ -217,15 +222,19 @@ char *xar_get_owner(xar_t x, xar_file_t f);
 char *xar_get_group(xar_t x, xar_file_t f);
 char *xar_get_mtime(xar_t x, xar_file_t f);
 
+/* For helping calling apps harden against hacked archives that attempt to escape their extraction roots. */
+int xar_path_issane(char* path);
+
 /* These are for xar modules and should never be needed from a calling app */
 void xar_register_errhandler(xar_t x, err_handler callback, void *usrctx);
 xar_t xar_err_get_archive(xar_errctx_t ctx);
 xar_file_t xar_err_get_file(xar_errctx_t ctx);
 const char *xar_err_get_string(xar_errctx_t ctx);
 int xar_err_get_errno(xar_errctx_t ctx);
-void  xar_err_set_file(xar_t x, xar_file_t f);
-void  xar_err_set_string(xar_t x, const char *str);
-void  xar_err_set_errno(xar_t x, int e);
+void xar_err_set_file(xar_t x, xar_file_t f);
+void xar_err_set_formatted_string(xar_t x, const char *format, ...);
+void xar_err_set_string(xar_t x, const char *str);
+void xar_err_set_errno(xar_t x, int e);
 void xar_err_new(xar_t x);
 int32_t xar_err_callback(xar_t x, int32_t sev, int32_t err);
 

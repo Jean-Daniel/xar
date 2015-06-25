@@ -1,5 +1,5 @@
 AC_PREREQ(2.59)
-AC_INIT([Xar], [1.6dev], [xar-devel@googlegroups.com], [xar])
+AC_INIT([Xar], [1.7dev], [xar-devel@googlegroups.com], [xar])
 AC_CONFIG_SRCDIR([LICENSE])
 
 dnl Revision number for libxar.
@@ -8,7 +8,7 @@ AC_SUBST([LIB_REV])
 
 dnl xar version variables.
 XAR_MAJOR_VERSION="1"
-XAR_MINOR_VERSION="6dev"
+XAR_MINOR_VERSION="7dev"
 XAR_VERSION="${XAR_MAJOR_VERSION}.${XAR_MINOR_VERSION}"
 AC_SUBST([XAR_MAJOR_VERSION])
 AC_SUBST([XAR_MINOR_VERSION])
@@ -181,9 +181,6 @@ fi
 )
 AC_SUBST([enable_autogen])
 
-AC_CHECK_HEADER([stdint.h], [C99_FIXED_WIDTH_TYPE_HEADER="#include <stdint.h>"], [AC_CHECK_HEADER([inttypes.h], [C99_FIXED_WIDTH_TYPE_HEADER="#include <inttypes.h>"], [])])
-AC_SUBST([C99_FIXED_WIDTH_TYPE_HEADER])
-
 AC_TRY_COMPILE([#include <sys/types.h> 
 #include <sys/acl.h>], [acl_t a], [AC_DEFINE([HAVE_SYS_ACL_H],[1], [define if you have sys/acl.h and it has a working acl_t type])])
 AC_CHECK_HEADERS(ext2fs/ext2_fs.h sys/statfs.h sys/xattr.h sys/param.h sys/extattr.h libutil.h)
@@ -323,16 +320,6 @@ if test "x${have_libxml2}" = "x0" ; then
 fi
 
 dnl 
-dnl Configure libcrypto (part of OpenSSL).
-dnl 
-have_libcrypto="1"
-AC_CHECK_HEADERS([openssl/evp.h], , [have_libcrypto="0"])
-AC_CHECK_LIB([crypto], [OpenSSL_add_all_ciphers], , [have_libcrypto="0"])
-if test "x${have_libcrypto}" = "x0" ; then
-  AC_MSG_ERROR([Cannot build without libcrypto (OpenSSL)])
-fi
-
-dnl 
 dnl Configure libz.
 dnl 
 have_libz="1"
@@ -344,40 +331,12 @@ fi
 
 dnl 
 dnl Configure libbz2.
-dnl This doesn't support specifying a path yet, but supports explicitly
-dnl enabling or disabling bzip2 support
+dnl 
 have_libbz2="1"
-AC_ARG_WITH([bzip2], [AS_HELP_STRING([--with-bzip2], [Explicitly enable or disable bzip2 support.  Defaults to enabled if available.])], [], [with_bzip2="yes"])
-
-if test "x$with_bzip2" != "xno"; then
-	AC_CHECK_HEADERS([bzlib.h], , [have_libbz2="0"])
-	AC_CHECK_LIB([bz2], [BZ2_bzCompress], , [have_libbz2="0"])
-	if test "x${have_libbz2}" = "x1" ; then
-		AC_DEFINE([HAVE_LIBBZ2])
-	fi
-fi
-
-dnl 
-dnl Configure liblzma.
-dnl 
-have_liblzma="1"
-AC_ARG_WITH([lzma], [AS_HELP_STRING([--with-lzma=PATH],
-	  [Compile in lzma support.  PATH is the prefix where liblzma is installed.],
-	  [], [])],
-	[ OLDCFLAGS=$CFLAGS; CFLAGS="-I$withval/include/ $CFLAGS";
-	  OLDLDFLAGS=$LDFLAGS; LDFLAGS="-L$withval/lib/ $LDFLAGS";
-	  OLDCPPFLAGS=$CPPFLAGS; CPPFLAGS="-I$withval/include/ $CPPFLAGS";
-	  AC_CHECK_HEADER([$withval/include/lzma.h], ,
-	    [have_liblzma="0"; CFLAGS=$OLDCFLAGS; LDFLAGS=$OLDLDFLAGS; 
-	    CPPFLAGS=$OLDCPPFLAGS;])
-	  AC_CHECK_LIB([lzma],  [lzma_code], [LIBS="-L$withval/lib/ -llzma $LIBS"], 
-	    [have_liblzma="0"])
-	],
-	[ AC_CHECK_HEADERS([lzma.h], , [have_liblzma="0"])
-	  AC_CHECK_LIB([lzma], [lzma_code], [], [have_liblzma="0"])
-	])
-if test "x${have_liblzma}" = "x1" ; then
-  AC_DEFINE([HAVE_LIBLZMA])
+AC_CHECK_HEADERS([bzlib.h], , [have_libbz2="0"])
+AC_CHECK_LIB([bz2], [BZ2_bzCompress], , [have_libbz2="0"])
+if test "x${have_libbz2}" = "x1" ; then
+  AC_DEFINE([HAVE_LIBBZ2])
 fi
 
 dnl 

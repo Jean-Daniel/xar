@@ -49,6 +49,7 @@
 #include <sys/stat.h>
 #include <arpa/inet.h> /* for ntoh{l,s} */
 #include <inttypes.h>  /* for PRIu64 */
+#include <time.h>
 #include <libxml/xmlwriter.h>
 #include <libxml/xmlreader.h>
 #include <libxml/xmlstring.h>
@@ -111,6 +112,10 @@ static xar_t xar_new() {
 	XAR(ret)->link_hash = xmlHashCreate(0);
 	XAR(ret)->csum_hash = xmlHashCreate(0);
 	XAR(ret)->subdocs = NULL;
+	
+	XAR(ret)->attrcopy_to_heap = xar_attrcopy_to_heap;
+	XAR(ret)->attrcopy_from_heap = xar_attrcopy_from_heap;
+	XAR(ret)->heap_to_archive = xar_heap_to_archive;
 	
 	return ret;
 }
@@ -191,8 +196,7 @@ xar_t xar_open(const char *file, int32_t flags) {
 	if( !file )
 		file = "-";
 	XAR(ret)->filename = strdup(file);
-	OpenSSL_add_all_digests();
-	if( flags ) {
+	if( flags ) { // writing
 		char *tmp1, *tmp2, *tmp3, *tmp4;
 		tmp1 = tmp2 = strdup(file);
 		tmp3 = dirname(tmp2);
@@ -216,6 +220,7 @@ xar_t xar_open(const char *file, int32_t flags) {
 			free(XAR(ret));
 			return NULL;
 		}
+		
 		unlink(tmp4);
 		free(tmp4);
 
@@ -234,12 +239,8 @@ xar_t xar_open(const char *file, int32_t flags) {
 		
 		xar_opt_set(ret, XAR_OPT_COMPRESSION, XAR_OPT_VAL_GZIP);
 		xar_opt_set(ret, XAR_OPT_FILECKSUM, XAR_OPT_VAL_SHA1);
+		xar_opt_set(ret, XAR_OPT_TOCCKSUM, XAR_OPT_VAL_SHA1);
 	} else {
-		unsigned char toccksum[EVP_MAX_MD_SIZE];
-		unsigned char cval[EVP_MAX_MD_SIZE];
-		unsigned int tlen;
-		const EVP_MD *md;
-
 		if( strcmp(file, "-") == 0 )
 			XAR(ret)->fd = 0;
 		else{
@@ -266,14 +267,16 @@ xar_t xar_open(const char *file, int32_t flags) {
 		case XAR_CKSUM_NONE:
 			break;
 		case XAR_CKSUM_SHA1:
-			XAR(ret)->docksum = 1;
-			md = EVP_get_digestbyname("sha1");
-			EVP_DigestInit(&XAR(ret)->toc_ctx, md);
+			XAR(ret)->toc_hash_ctx = xar_hash_new("sha1", (void *)ret);
+			break;
+		case XAR_CKSUM_SHA256:
+			XAR(ret)->toc_hash_ctx = xar_hash_new("sha256", (void *)ret);
+			break;
+		case XAR_CKSUM_SHA512:
+			XAR(ret)->toc_hash_ctx = xar_hash_new("sha512", (void *)ret);
 			break;
 		case XAR_CKSUM_MD5:
-			XAR(ret)->docksum = 1;
-			md = EVP_get_digestbyname("md5");
-			EVP_DigestInit(&XAR(ret)->toc_ctx, md);
+			XAR(ret)->toc_hash_ctx = xar_hash_new("md5", (void *)ret);
 			break;
 		default:
 			fprintf(stderr, "Unknown hashing algorithm, skipping\n");
@@ -301,6 +304,12 @@ xar_t xar_open(const char *file, int32_t flags) {
 			case XAR_CKSUM_SHA1:
 				cksum_match = (cksum_style != NULL && strcmp(cksum_style, XAR_OPT_VAL_SHA1) == 0);
 				break;
+			case XAR_CKSUM_SHA256:
+				cksum_match = (cksum_style != NULL && strcmp(cksum_style, XAR_OPT_VAL_SHA256) == 0);
+				break;
+			case XAR_CKSUM_SHA512:
+				cksum_match = (cksum_style != NULL && strcmp(cksum_style, XAR_OPT_VAL_SHA512) == 0);
+				break;
 			case XAR_CKSUM_MD5:
 				cksum_match = (cksum_style != NULL && strcmp(cksum_style, XAR_OPT_VAL_MD5) == 0);
 				break;
@@ -324,15 +333,19 @@ xar_t xar_open(const char *file, int32_t flags) {
 			xar_close(ret);
 			return NULL;
 		}
-			
-		if( !XAR(ret)->docksum )
+		
+		/* If we aren't checksumming the TOC, we're done */
+		if( !XAR(ret)->toc_hash_ctx )
 			return ret;
-
-		EVP_DigestFinal(&XAR(ret)->toc_ctx, toccksum, &tlen);
-
+        
+        /* if TOC specifies a location for the checksum, make sure that
+         * we read the checksum from there: this is required for an archive
+         * with a signature, because the signature will be checked against
+         * the checksum at the specified location <rdar://problem/7041949>
+         */
 		const char *value;
 		uint64_t offset = 0;
-		uint64_t length = tlen;
+		uint64_t length = 0;
 		if( xar_prop_get( XAR_FILE(ret) , "checksum/offset", &value) == 0 ) {
 			errno = 0;
 			offset = strtoull( value, (char **)NULL, 10);
@@ -346,7 +359,7 @@ xar_t xar_open(const char *file, int32_t flags) {
 			xar_close(ret);
 			return NULL;
 		}
-
+        
 		XAR(ret)->heap_offset = xar_get_heap_offset(ret) + offset;
 		if( lseek(XAR(ret)->fd, XAR(ret)->heap_offset, SEEK_SET) == -1 ) {
 			xar_close(ret);
@@ -363,18 +376,35 @@ xar_t xar_open(const char *file, int32_t flags) {
 			xar_close(ret);
 			return NULL;
 		}
+		
+		size_t tlen = 0;
+		void *toccksum = xar_hash_finish(XAR(ret)->toc_hash_ctx, &tlen);
+		
 		if( length != tlen ) {
+			free(toccksum);
 			xar_close(ret);
 			return NULL;
 		}
-
+		
+		void *cval = calloc(1, tlen);
+		if( ! cval ) {
+			free(toccksum);
+			xar_close(ret);
+			return NULL;
+		}
+		
 		xar_read_fd(XAR(ret)->fd, cval, tlen);
 		XAR(ret)->heap_offset += tlen;
 		if( memcmp(cval, toccksum, tlen) != 0 ) {
 			fprintf(stderr, "Checksums do not match!\n");
+			free(toccksum);
+			free(cval);
 			xar_close(ret);
 			return NULL;
 		}
+		
+		free(toccksum);
+		free(cval);
 	}
 
 	return ret;
@@ -399,7 +429,6 @@ int xar_close(xar_t x) {
 		long rsize, wsize;
 		z_stream zs;
 		uint64_t ungztoc, gztoc;
-		unsigned char chkstr[EVP_MAX_MD_SIZE];
 		int tocfd;
 		char timestr[128];
 		struct tm tmptm;
@@ -410,27 +439,34 @@ int xar_close(xar_t x) {
 		if( !tmpser ) tmpser = XAR_OPT_VAL_SHA1;
 
 		if( (strcmp(tmpser, XAR_OPT_VAL_NONE) != 0) ) {
-			const EVP_MD *md;
 			xar_prop_set(XAR_FILE(x), "checksum", NULL);
 			if( strcmp(tmpser, XAR_OPT_VAL_SHA1) == 0 ) {
-				md = EVP_get_digestbyname("sha1");
-				EVP_DigestInit(&XAR(x)->toc_ctx, md);
+				XAR(x)->toc_hash_ctx = xar_hash_new("sha1", (void *)x);
 				XAR(x)->header.cksum_alg = htonl(XAR_CKSUM_SHA1);
 				xar_attr_set(XAR_FILE(x), "checksum", "style", XAR_OPT_VAL_SHA1);
 				xar_prop_set(XAR_FILE(x), "checksum/size", "20");
 			}
+			if( strcmp(tmpser, XAR_OPT_VAL_SHA256) == 0 ) {
+				XAR(x)->toc_hash_ctx = xar_hash_new("sha256", (void *)x);
+				XAR(x)->header.cksum_alg = htonl(XAR_CKSUM_SHA256);
+				xar_attr_set(XAR_FILE(x), "checksum", "style", XAR_OPT_VAL_SHA256);
+				xar_prop_set(XAR_FILE(x), "checksum/size", "32");
+			}
+			if( strcmp(tmpser, XAR_OPT_VAL_SHA512) == 0 ) {
+				XAR(x)->toc_hash_ctx = xar_hash_new("sha512", (void *)x);
+				XAR(x)->header.cksum_alg = htonl(XAR_CKSUM_SHA512);
+				xar_attr_set(XAR_FILE(x), "checksum", "style", XAR_OPT_VAL_SHA512);
+				xar_prop_set(XAR_FILE(x), "checksum/size", "64");
+			}
 			if( strcmp(tmpser, XAR_OPT_VAL_MD5) == 0 ) {
-				md = EVP_get_digestbyname("md5");
-				EVP_DigestInit(&XAR(x)->toc_ctx, md);
+				XAR(x)->toc_hash_ctx = xar_hash_new("md5", (void *)x);
 				XAR(x)->header.cksum_alg = htonl(XAR_CKSUM_MD5);
 				xar_attr_set(XAR_FILE(x), "checksum", "style", XAR_OPT_VAL_MD5);
 				xar_prop_set(XAR_FILE(x), "checksum/size", "16");
 			}
 
 			xar_prop_set(XAR_FILE(x), "checksum/offset", "0");
-			XAR(x)->docksum = 1;
 		} else {
-			XAR(x)->docksum = 0;
 			XAR(x)->header.cksum_alg = XAR_CKSUM_NONE;
 		}
 
@@ -439,7 +475,7 @@ int xar_close(xar_t x) {
 		memset(timestr, 0, sizeof(timestr));
 		strftime(timestr, sizeof(timestr), "%FT%T", &tmptm);
 		xar_prop_set(XAR_FILE(x), "creation-time", timestr);
-
+		
 		/* serialize the toc to a tmp file */
 		asprintf(&tmpser, "%s/xar.toc.XXXXXX", XAR(x)->dirname);
 		fd = mkstemp(tmpser);
@@ -467,6 +503,8 @@ int xar_close(xar_t x) {
 		rbuf = malloc(rsize);
 		if( !rbuf ) {
 			retval = -1;
+			close(fd);
+			close(tocfd);
 			goto CLOSE_BAIL;
 		}
 		zs.zalloc = Z_NULL;
@@ -516,8 +554,8 @@ int xar_close(xar_t x) {
 					retval = -1;
 					goto CLOSEEND;
 				}
-				if( XAR(x)->docksum )
-					EVP_DigestUpdate(&XAR(x)->toc_ctx, ((char*)wbuf)+off, r);
+				if( XAR(x)->toc_hash_ctx )
+					xar_hash_update(XAR(x)->toc_hash_ctx, ((char*)wbuf)+off, r);
 				off += r;
 				gztoc += r;
 			} while( off < wbytes );
@@ -532,8 +570,8 @@ int xar_close(xar_t x) {
 		deflate(&zs, Z_FINISH);
 		r = write(tocfd, wbuf, wsize - zs.avail_out);
 		gztoc += r;
-		if( XAR(x)->docksum )
-			EVP_DigestUpdate(&XAR(x)->toc_ctx, wbuf, r);
+		if( XAR(x)->toc_hash_ctx )
+			xar_hash_update(XAR(x)->toc_hash_ctx, wbuf, r);
 		
 		deflateEnd(&zs);
 
@@ -572,87 +610,75 @@ int xar_close(xar_t x) {
 			} while( off < wbytes );
 		}
 
-		if( XAR(x)->docksum ) {
-			unsigned int l = r;
-			
-			memset(chkstr, 0, sizeof(chkstr));
-			EVP_DigestFinal(&XAR(x)->toc_ctx, chkstr, &l);
-			r = l;
-			write(XAR(x)->fd, chkstr, r);
-		}
+		if( XAR(x)->toc_hash_ctx ) {
+			size_t chklen = 0;
+			void *chkstr = xar_hash_finish(XAR(x)->toc_hash_ctx, &chklen);
+			write(XAR(x)->fd, chkstr, chklen);
 
-		/* If there are any signatures, get the signed data a sign it */
-		if( XAR(x)->docksum && XAR(x)->signatures ) {
-			xar_signature_t sig;
-			uint32_t data_len = r;
-			uint32_t signed_len = 0;
-			uint8_t *signed_data = NULL;
-			
-			/* Loop through the signatures */
-			for(sig = XAR(x)->signatures; sig; sig = XAR_SIGNATURE(sig)->next ){				
-				signed_len = XAR_SIGNATURE(sig)->len;
+			/* If there are any signatures, get the signed data a sign it */
+			if( XAR(x)->signatures ) {
+				xar_signature_t sig;
+				uint32_t signed_len = 0;
+				uint8_t *signed_data = NULL;
 				
-				/* If callback returns something other then 0, bail */
-				if( 0 != sig->signer_callback( sig, sig->callback_context, chkstr, data_len, &signed_data, &signed_len ) ){
-					fprintf(stderr, "Error signing data.\n");
-					retval = -1;
-					goto CLOSE_BAIL;					
+				/* Loop through the signatures */
+				for(sig = XAR(x)->signatures; sig; sig = XAR_SIGNATURE(sig)->next ){				
+					signed_len = XAR_SIGNATURE(sig)->len;
+					
+					/* If callback returns something other then 0, bail */
+					if( 0 != sig->signer_callback( sig, sig->callback_context, chkstr, chklen, &signed_data, &signed_len ) ){
+						fprintf(stderr, "Error signing data.\n");
+						free(chkstr);
+						retval = -1;
+						close(fd);
+						close(tocfd);
+						goto CLOSE_BAIL;					
+					}
+					
+					if( signed_len != XAR_SIGNATURE(sig)->len ){
+						fprintf(stderr, "Signed data not the proper length.  %i should be %i.\n",signed_len,XAR_SIGNATURE(sig)->len);
+						free(chkstr);
+						retval = -1;
+						close(fd);
+						close(tocfd);
+						goto CLOSE_BAIL;										
+					}
+					
+					/* Write the signed data to the heap */
+					write(XAR(x)->fd, signed_data,XAR_SIGNATURE(sig)->len);
+					
+					free(signed_data);
 				}
-				
-				if( signed_len != XAR_SIGNATURE(sig)->len ){
-					fprintf(stderr, "Signed data not the proper length.  %i should be %i.\n",signed_len,XAR_SIGNATURE(sig)->len);
-					retval = -1;
-					goto CLOSE_BAIL;										
-				}
-				
-				/* Write the signed data to the heap */
-				write(XAR(x)->fd, signed_data,XAR_SIGNATURE(sig)->len);
-				
-				free(signed_data);
+				free(chkstr);
 			}
 			
 			xar_signature_remove( XAR(x)->signatures );
 			XAR(x)->signatures = NULL;
 		}
-
+		
 		/* copy the heap from the temporary heap into the archive */
-		if( lseek(XAR(x)->heap_fd, (off_t)0, SEEK_SET) < 0 ) {
-			fprintf(stderr, "Error lseeking to offset 0: %s\n", strerror(errno));
-			exit(1);
+		if( 0 > XAR(x)->heap_to_archive(x) ) {
+			xar_err_new(x);
+			xar_err_set_string(x, "Error while copying heap contents into archive");
+			xar_err_set_errno(x, errno);
+			xar_err_callback(x, XAR_SEVERITY_FATAL, XAR_ERR_ARCHIVE_CREATION);
+			retval = -1;
+			close(fd);
+			close(tocfd);
+			goto CLOSEEND;
 		}
-		rbytes = 0;
-		while(1) {
-			if( (XAR(x)->heap_len - rbytes) < rsize )
-				rsize = XAR(x)->heap_len - rbytes;
-
-			r = read(XAR(x)->heap_fd, rbuf, rsize);
-			if( (r < 0 ) && (errno == EINTR) )
-				continue;
-			if( r == 0 )
-				break;
-	
-			rbytes += r;
-			wbytes = r;
-			off = 0;
-			do {
-				r = write(XAR(x)->fd, ((char *)rbuf)+off, wbytes);
-				if( (r < 0 ) && (errno == EINTR) )
-					continue;
-				if( r < 0 ) {
-					retval = -1;
-					goto CLOSEEND;
-				}
-				off += r;
-			} while( off < wbytes );
-
-			if( rbytes >= XAR(x)->heap_len )
-				break;
-		}
+		
 CLOSEEND:
+		close(fd);
+		close(tocfd);
 		free(rbuf);
 		free(wbuf);
 		deflateEnd(&XAR(x)->zs);
 	} else {
+		
+		xar_signature_remove( XAR(x)->signatures );
+		XAR(x)->signatures = NULL;
+		
 		inflateEnd(&XAR(x)->zs);
 	}
 		
@@ -720,22 +746,31 @@ const char *xar_opt_get(xar_t x, const char *option) {
  * Returns: 0 for sucess, -1 for failure
  */
 int32_t xar_opt_set(xar_t x, const char *option, const char *value) {
-	xar_attr_t a;
+	xar_attr_t currentAttr, a;
 
 	if( (strcmp(option, XAR_OPT_TOCCKSUM) == 0) ) {
-		if( strcmp(value, XAR_OPT_VAL_NONE) == 0 ) {
-			XAR(x)->heap_offset = 0;
-		}
-		if( strcmp(value, XAR_OPT_VAL_SHA1) == 0 ) {
-			XAR(x)->heap_offset = 20;
-		}
-		if( strcmp(value, XAR_OPT_VAL_MD5) == 0 ) {
-			XAR(x)->heap_offset = 16;
-		}
+		XAR(x)->heap_offset = xar_io_get_toc_checksum_length_for_type(value);
 	}
+	
+	/*	This was an edit from xar-1.4
+		Looks like we would only allow one definition for a particular key in this list
+		But xar_opt_unset is implemented to remove many pairs for the same key
+	 
+	// if the attribute is already defined, find it and free its value,
+	// replace and return
+	for(currentAttr = XAR(x)->attrs; currentAttr ; currentAttr = XAR_ATTR(currentAttr)->next) {
+		if(strcmp(XAR_ATTR(currentAttr)->key, option)==0) {
+			free((char*)XAR_ATTR(currentAttr)->value);
+			XAR_ATTR(currentAttr)->value = strdup(value);
+			return 0;
+		}
+	} */
+	
+	// otherwise create a new attribute
 	a = xar_attr_new();
 	XAR_ATTR(a)->key = strdup(option);
 	XAR_ATTR(a)->value = strdup(value);
+	// and prepend it to the attrs list for the archive
 	XAR_ATTR(a)->next = XAR(x)->attrs;
 	XAR(x)->attrs = a;
 	return 0;
@@ -747,15 +782,24 @@ int32_t xar_opt_set(xar_t x, const char *option, const char *value) {
  * This will delete ALL instances of the option name
  */
 int32_t xar_opt_unset(xar_t x, const char *option) {
-	xar_attr_t i, p = NULL;
-	for(i = XAR(x)->attrs; i ; p = i, i = XAR_ATTR(i)->next) {
-		if(strcmp(XAR_ATTR(i)->key, option)==0) {
-			if( p == NULL )
-				XAR(x)->attrs = XAR_ATTR(i)->next;
+	xar_attr_t currentAttr, previousAttr = NULL;
+	for(currentAttr = XAR(x)->attrs; 
+		currentAttr ; 
+		previousAttr = currentAttr, currentAttr = XAR_ATTR(currentAttr)->next) {
+		if(strcmp(XAR_ATTR(currentAttr)->key, option)==0) {
+			
+			// if this attribute match is the head of the attrs list
+			// promote the next list item to the head
+			if( previousAttr == NULL )
+				XAR(previousAttr)->attrs = XAR_ATTR(currentAttr)->next;
+			
+			// otherwise splice the list around this attr
 			else
-				XAR_ATTR(p)->next = XAR_ATTR(i)->next;
-			xar_attr_free(i);
-			i = p;
+				XAR_ATTR(previousAttr)->next = XAR_ATTR(currentAttr)->next;
+			xar_attr_free(currentAttr);
+			
+			// keep going to find other instances
+			currentAttr = previousAttr;
 		}
 	}
 	return 0;
@@ -1367,9 +1411,9 @@ static int toc_read_callback(void *context, char *buffer, int len) {
 			ret = read(XAR(x)->fd, XAR(x)->readbuf, XAR(x)->readbuf_len);
 		if ( ret == -1 )
 			return ret;
-
-		if ( XAR(x)->docksum )
-			EVP_DigestUpdate(&XAR(x)->toc_ctx, XAR(x)->readbuf, ret);
+		
+		if ( XAR(x)->toc_hash_ctx )
+			xar_hash_update(XAR(x)->toc_hash_ctx, XAR(x)->readbuf, ret);
 
 		XAR(x)->toc_count += ret;
 		off += ret;
@@ -1471,14 +1515,16 @@ static int32_t xar_unserialize(xar_t x) {
 								f = xar_file_unserialize(x, NULL, reader);
 								XAR_FILE(f)->next = XAR(x)->files;
 								XAR(x)->files = f;
-							} else if( strcmp((const char*)name, "signature") == 0 ){
+							} else if( strcmp((const char*)name, "signature") == 0
+#ifdef __APPLE__
+                                      || strcmp((const char*)name, "x-signature") == 0
+#endif
+                                      ){
 								xar_signature_t sig = NULL;			
 								sig = xar_signature_unserialize(x, reader );
 								
 								if( !sig ) {
 									xmlFreeTextReader(reader);
-									xmlDictCleanup();
-									xmlCleanupCharEncodingHandlers();
 									return -1;
 								}
 								
@@ -1494,8 +1540,6 @@ static int32_t xar_unserialize(xar_t x) {
 					}
 					if( ret == -1 ) {
 						xmlFreeTextReader(reader);
-						xmlDictCleanup();
-						xmlCleanupCharEncodingHandlers();
 						return -1;
 					}
 				} else {
@@ -1525,7 +1569,12 @@ static int32_t xar_unserialize(xar_t x) {
 					}
 
 					s = xar_subdoc_new(x, (const char *)name);
-					xar_subdoc_unserialize(s, reader);
+                    if(s){
+                        xar_subdoc_unserialize(s, reader);
+                    }else{
+                        xmlFreeTextReader(reader);
+                        return -1;
+                    }
 				}
 			}
 			if( (type == XML_READER_TYPE_END_ELEMENT) && (strcmp((const char *)name, "toc")==0) ) {
@@ -1534,21 +1583,15 @@ static int32_t xar_unserialize(xar_t x) {
 		}
 		if( ret == -1 ) {
 			xmlFreeTextReader(reader);
-			xmlDictCleanup();
-			xmlCleanupCharEncodingHandlers();
 			return -1;
 		}
 	}
 
 	if( ret == -1 ) {
 		xmlFreeTextReader(reader);
-		xmlDictCleanup();
-		xmlCleanupCharEncodingHandlers();
 		return -1;
 	}
 		
 	xmlFreeTextReader(reader);
-	xmlDictCleanup();
-	xmlCleanupCharEncodingHandlers();
 	return 0;
 }
