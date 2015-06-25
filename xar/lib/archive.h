@@ -84,7 +84,7 @@ struct __xar_t {
 	                         * between callbacks. */
 	size_t toc_count;       /* current bytes read of the toc */
 	z_stream zs;            /* gz state for compressing/decompressing toc */
-	char *path_prefix;      /* used for distinguishing absolute paths */
+	const char *path_prefix;      /* used for distinguishing absolute paths */
 	err_handler ercallback; /* callback for errors/warnings */
 	struct errctx errctx;   /* error callback context */
 	xar_subdoc_t subdocs;   /* linked list of subdocs */

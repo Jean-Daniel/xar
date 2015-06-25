@@ -92,7 +92,7 @@ void xar_serialize(xar_t x, const char *file);
  * Summary: just does basicallocation and initialization of 
  * xar_t structure.
  */
-static xar_t xar_new() {
+static xar_t xar_new(void) {
 	xar_t ret;
 	ret = malloc(sizeof(struct __xar_t));
 	if(!ret) return NULL;
@@ -1108,7 +1108,7 @@ xar_file_t xar_add(xar_t x, const char *path) {
 * using the filesystem.
 */
 
-xar_file_t xar_add_frombuffer(xar_t x, xar_file_t parent, const char *name, char *buffer, size_t length) {
+xar_file_t xar_add_frombuffer(xar_t x, xar_file_t parent, const char *name, const char *buffer, size_t length) {
 	xar_file_t ret;
 	char idstr[32];
 	

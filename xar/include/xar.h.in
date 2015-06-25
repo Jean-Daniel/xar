@@ -145,7 +145,7 @@ xar_t xar_open(const char *file, int32_t flags);
 int xar_close(xar_t x);
 xar_file_t xar_add(xar_t x, const char *path);
 
-xar_file_t xar_add_frombuffer(xar_t x, xar_file_t parent, const char *name, char *buffer, size_t length);
+xar_file_t xar_add_frombuffer(xar_t x, xar_file_t parent, const char *name, const char *buffer, size_t length);
 xar_file_t xar_add_folder(xar_t x, xar_file_t f, const char *name, struct stat *info);
 xar_file_t xar_add_frompath(xar_t x, xar_file_t parent, const char *name, const char *realpath);
 

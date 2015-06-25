@@ -910,6 +910,9 @@ xar_file_t xar_file_find(xar_file_t f, const char *path) {
 	return NULL;
 }
 
+xar_file_t xar_file_get_parent(xar_file_t file) {
+  return file->parent;
+}
 
 /* xar_prop_serialize
  * p: property to serialize

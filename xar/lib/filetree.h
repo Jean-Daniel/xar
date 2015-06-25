@@ -96,6 +96,7 @@ void xar_attr_free(xar_attr_t a);
 void xar_file_serialize(xar_file_t f, xmlTextWriterPtr writer);
 xar_file_t xar_file_unserialize(xar_t x, xar_file_t parent, xmlTextReaderPtr reader);
 xar_file_t xar_file_find(xar_file_t f, const char *path);
+xar_file_t xar_file_get_parent(xar_file_t file);
 xar_file_t xar_file_new(xar_file_t f);
 xar_file_t xar_file_replicate(xar_file_t original, xar_file_t newparent);
 void xar_file_free(xar_file_t f);
