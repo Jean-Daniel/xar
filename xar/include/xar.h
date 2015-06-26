@@ -126,9 +126,6 @@ typedef int32_t (*xar_signer_callback)(xar_signature_t sig, void *context, uint8
 #define XAR_OPT_VAL_TRUE       "true"
 #define XAR_OPT_VAL_FALSE      "false"
 
-/* xar signing algorithms */
-#define XAR_SIG_SHA1RSA		1
-
 
 /* xar error handler macros */
 #define XAR_SEVERITY_DEBUG    1
