@@ -477,7 +477,8 @@ static int32_t underbar_archive(xar_t x, xar_file_t f, const char* file, void *c
 	char *dname, *bname, *tmp, *tmp2;
 	struct AppleSingleHeader ash;
 	struct AppleSingleEntry  ase;
-	int num_entries = 0, i, r;
+	int num_entries = 0, i;
+  ssize_t r;
 	off_t off;
 
 	if( !file )

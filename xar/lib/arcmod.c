@@ -66,9 +66,8 @@ struct arcmod xar_arcmods[] = {
  * Summary: This is the entry point to actual file archival.
  */
 int32_t xar_arcmod_archive(xar_t x, xar_file_t f, const char *file, const char *buffer, size_t len) {
-	int i;
 	int32_t ret;
-	for(i = 0; i < (sizeof(xar_arcmods)/sizeof(struct arcmod)); i++) {
+	for(size_t i = 0; i < (sizeof(xar_arcmods)/sizeof(struct arcmod)); i++) {
 		if( xar_arcmods[i].archive ) {
 			ret = xar_arcmods[i].archive(x, f, file, buffer, len);
 			if( ret < 0 ) {
@@ -90,9 +89,8 @@ int32_t xar_arcmod_archive(xar_t x, xar_file_t f, const char *file, const char *
  * Summary: This is the entry point to actual file archival.
  */
 int32_t xar_arcmod_extract(xar_t x, xar_file_t f, const char *file, char *buffer, size_t len) {
-	int i;
 	int32_t ret;
-	for(i = 0; i < (sizeof(xar_arcmods)/sizeof(struct arcmod)); i++) {
+	for(size_t i = 0; i < (sizeof(xar_arcmods)/sizeof(struct arcmod)); i++) {
 		if( xar_arcmods[i].extract ) {
 			ret = xar_arcmods[i].extract(x, f, file, buffer, len);
 			if( ret < 0 ) {
