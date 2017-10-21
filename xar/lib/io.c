@@ -63,6 +63,7 @@
 #include "script.h"
 #include "macho.h"
 #include "util.h"
+#include "data.h"
 
 #if !defined(LLONG_MAX) && defined(LONG_LONG_MAX)
 #define LLONG_MAX LONG_LONG_MAX
@@ -119,7 +120,7 @@ struct datamod xar_datamods[] = {
 };
 
 size_t xar_io_get_rsize(xar_t x) {
-	ssize_t bsize;
+	size_t bsize;
 	const char *opt = NULL;
 
 	opt = xar_opt_get(x, "rsize");
@@ -129,9 +130,7 @@ size_t xar_io_get_rsize(xar_t x) {
 		bsize = strtol(opt, NULL, 0);
 		if( ((bsize == LONG_MAX) || (bsize == LONG_MIN)) && (errno == ERANGE) ) {
 			bsize = 4096;
-		} else if( bsize <= 0 ) {
-      bsize = 4096;
-    }
+		}
 	}
 
 	return bsize;
@@ -153,6 +152,7 @@ size_t xar_io_get_toc_checksum_length_for_type(const char *type) {
 	} else if( strcmp(type, XAR_OPT_VAL_SHA512) == 0 ) {
 		return 64;
 	} else if( strcmp(type, XAR_OPT_VAL_MD5) == 0 ) {
+		// Left in place regardless of XAR_SUPPORT_MD5 for proper archive parsing
 		return 16;
 	} else {
 		return 0;
@@ -170,6 +170,7 @@ size_t xar_io_get_toc_checksum_length(xar_t x) {
 		case XAR_CKSUM_SHA512:
 			return 64;
 		case XAR_CKSUM_MD5:
+			// Left in place regardless of XAR_SUPPORT_MD5 for proper archive parsing
 			return 16;
 		default:
 			fprintf(stderr, "Unknown hashing algorithm, skipping\n");
@@ -183,6 +184,9 @@ off_t xar_io_get_file_offset(xar_t x, xar_file_t f, xar_prop_t p) {
 	tmpp = xar_prop_pget(p, "offset");
 	if( tmpp ) {
 		opt = xar_prop_getvalue(tmpp);
+		if (opt == NULL){
+		    return -1;
+		}
 		return strtoll(opt, NULL, 0);
 	} else {
 		return -1;
@@ -438,8 +442,10 @@ int32_t xar_attrcopy_from_heap(xar_t x, xar_file_t f, xar_prop_t p, write_callba
 	void	*modulecontext[modulecount];
 	int r, i;
 	size_t bsize, def_bsize;
-	int64_t fsize, inc = 0, seekoff;
+	int64_t fsize, inc = 0, seekoff, readsofar = 0;
 	void *inbuf;
+	const char *opt;
+	xar_prop_t tmpp;
 
 	memset(modulecontext, 0, sizeof(void*)*modulecount);
 
@@ -517,6 +523,11 @@ int32_t xar_attrcopy_from_heap(xar_t x, xar_file_t f, xar_prop_t p, write_callba
 			wcb(x, f, inbuf, bsize, context);
 		}
 		
+		readsofar += bsize;
+
+		if (DATA_CONTEXT(context)->progress)
+			DATA_CONTEXT(context)->progress(x, f, readsofar);
+
 		bsize = def_bsize;
 	}
 

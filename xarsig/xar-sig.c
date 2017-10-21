@@ -31,6 +31,7 @@
  * DRI: Rob Braun <bbraun@opendarwin.org>
  */
 
+#include <spawn.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -61,6 +62,8 @@
 // error codes for B&I
 #define E_NOSIG		60
 #define E_SIGEXISTS 61
+
+extern char **environ;
 
 static int Perms = 0;
 static int Local = 0;
@@ -426,8 +429,10 @@ static void replace_sign(const char *filename) {
 	char *new_xar_path = (char *)malloc(15);
 	strncpy(new_xar_path, "/tmp/xar.XXXXX", 15);
 	new_xar_path = mktemp(new_xar_path);
-	char *systemcall;
 	int err;
+	pid_t pid;
+	char **argv;
+	int status;
 	
 	// open the first archive
 	old_xar = xar_open(filename, READ);
@@ -556,18 +561,39 @@ static void replace_sign(const char *filename) {
 	
 	// delete old archive, move new in its place
 	unlink(filename);
-	asprintf(&systemcall, "cp \"%s\" \"%s\"", new_xar_path, filename);
-	err = system(systemcall);
+	argv = calloc(sizeof(char *), 4);
+	argv[0] = "cp";
+	argv[1] = new_xar_path;
+	argv[2] = (char *)filename;
+	err = posix_spawn(&pid, "/bin/cp", NULL, NULL, argv, environ);
+	free(argv);
+
 	if (err) {
-		fprintf(stderr, "Could not copy new archive to final location (system() returned %i)\n", err);
+		fprintf(stderr, "Could not copy new archive to final location (posix_spawn(3) failed with %d)\n", errno);
 		unlink(new_xar_path);
 		exit(1);
 	}
 	
+	do {
+		err = waitpid(pid, &status, 0);
+		if (err == pid) {
+			if (WIFEXITED(status)) {
+				if (WEXITSTATUS(status) != 0) {
+					fprintf(stderr, "Could not copy new archive to final location (cp(1) exited %d)\n", WEXITSTATUS(status));
+					unlink(new_xar_path);
+					exit(1);
+				}
+				break;
+			}
+		} else {
+			fprintf(stderr, "Could not copy new archive to final location (waidpid(2) failed with %d)\n", errno);
+			unlink(new_xar_path);
+			exit(1);
+		}
+	} while (1);
+
 	// Delete the tmp archive
 	unlink(new_xar_path);
-	
-	free(systemcall);
 }
 
 /*	belated_sign
@@ -972,8 +998,13 @@ static int dump_header(const char *filename) {
 	                     break;
 	case XAR_CKSUM_SHA512: printf("(SHA512)\n");
 	                     break;
+#ifdef XAR_SUPOPRT_MD5
 	case XAR_CKSUM_MD5: printf("(MD5)\n");
-	                    break;
+	                     break;
+#else
+	case XAR_CKSUM_MD5: printf("(unsupported (MD5))\n");
+	                     break;
+#endif // XAR_SUPPORT_MD5
 	default: printf("(unknown)\n");
 	         break;
 	};
@@ -1064,11 +1095,19 @@ static void usage(const char *prog) {
 	fprintf(stderr, "\t-P               On extract, set ownership based on uid/gid.\n");
 	fprintf(stderr, "\t--toc-cksum      Specifies the hashing algorithm to use for\n");
 	fprintf(stderr, "\t                      xml header verification.\n");
+#ifdef XAR_SUPPORT_MD5
 	fprintf(stderr, "\t                      Valid values: none, md5, sha1, sha256, and sha512\n");
+#else
+	fprintf(stderr, "\t                      Valid values: none, sha1, sha256, and sha512\n");
+#endif // XAR_SUPPORT_MD5
 	fprintf(stderr, "\t                      Default: sha1\n");
 	fprintf(stderr, "\t--file-cksum     Specifies the hashing algorithm to use for\n");
 	fprintf(stderr, "\t                      xml header verification.\n");
+#ifdef XAR_SUPPORT_MD5
 	fprintf(stderr, "\t                      Valid values: none, md5, sha1, sha256, and sha512\n");
+#else
+	fprintf(stderr, "\t                      Valid values: none, sha1, sha256, and sha512\n");
+#endif // XAR_SUPPORT_MD5
 	fprintf(stderr, "\t                      Default: sha1\n");
 	fprintf(stderr, "\t--dump-toc=<filename> Has xar dump the xml header into the\n");
 	fprintf(stderr, "\t                      specified file.\n");

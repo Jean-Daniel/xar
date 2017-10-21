@@ -1,5 +1,5 @@
 AC_PREREQ(2.59)
-AC_INIT([Xar], [1.7dev], [xar-devel@googlegroups.com], [xar])
+AC_INIT([Xar], [1.8dev], [xar-devel@googlegroups.com], [xar])
 AC_CONFIG_SRCDIR([LICENSE])
 
 dnl Revision number for libxar.
@@ -8,7 +8,7 @@ AC_SUBST([LIB_REV])
 
 dnl xar version variables.
 XAR_MAJOR_VERSION="1"
-XAR_MINOR_VERSION="7dev"
+XAR_MINOR_VERSION="8dev"
 XAR_VERSION="${XAR_MAJOR_VERSION}.${XAR_MINOR_VERSION}"
 AC_SUBST([XAR_MAJOR_VERSION])
 AC_SUBST([XAR_MINOR_VERSION])
@@ -337,6 +337,16 @@ AC_CHECK_HEADERS([bzlib.h], , [have_libbz2="0"])
 AC_CHECK_LIB([bz2], [BZ2_bzCompress], , [have_libbz2="0"])
 if test "x${have_libbz2}" = "x1" ; then
   AC_DEFINE([HAVE_LIBBZ2])
+fi
+
+dnl 
+dnl Configure libpthread.
+dnl 
+have_libpthread="1"
+AC_CHECK_HEADERS([pthread.h], , [have_pthread="0"])
+AC_CHECK_LIB([pthread], [pthread_mutex_lock], , [have_pthread="0"])
+if test "x${have_pthread}" = "x1" ; then
+  AC_DEFINE([HAVE_PTHREAD])
 fi
 
 dnl 

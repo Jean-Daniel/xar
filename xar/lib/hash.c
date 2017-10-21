@@ -43,7 +43,7 @@
 #include <zlib.h>
 #ifdef __APPLE__
 #include <CommonCrypto/CommonDigest.h>
-#include "CommonDigestSPI.h"
+#include <CommonCrypto/CommonDigestSPI.h>
 #else
 #include <openssl/evp.h>
 #endif
@@ -78,10 +78,12 @@ CCDigestRef digestRef_from_name(const char* name, unsigned int *outHashSize) {
         result = CCDigestCreate(kCCDigestSHA1);
         if (NULL != outHashSize)
             *outHashSize = CC_SHA1_DIGEST_LENGTH;
+#ifdef XAR_SUPPORT_MD5
     } else if (0 == strcasecmp(name, "md5")) {
         result = CCDigestCreate(kCCDigestMD5);
         if (NULL != outHashSize)
             *outHashSize = CC_MD5_DIGEST_LENGTH;
+#endif // XAR_SUPPORT_MD5
     } else if (0 == strcasecmp(name, "md2")) {
         result = CCDigestCreate(kCCDigestMD2);
         if (NULL != outHashSize)
@@ -205,10 +207,28 @@ int32_t xar_hash_fromheap_out(xar_t x, xar_file_t f, xar_prop_t p, void *in, siz
 
 	opt = NULL;
 	tmpp = xar_prop_pget(p, "extracted-checksum");
-	if( tmpp )
+	if( tmpp ) {
 		opt = xar_attr_pget(f, tmpp, "style");
-	
-	if( !opt ) 	
+	} else {
+		// The xar-1.7 release in OS X Yosemite accidentally wrote <unarchived-checksum>
+		// instead of <extracted-checksum>. Since archives like this are now in the wild,
+		// we check for both.
+		tmpp = xar_prop_pget(p, "unarchived-checksum");
+		if( tmpp ) {
+			opt = xar_attr_pget(f, tmpp, "style");
+		}
+	}
+
+	// If there's an <archived-checksum> and no <extracted-checksum> (or
+	// <unarchived-checksum>), the archive is malformed.
+	if ( !opt && xar_prop_pget(p, "archived-checksum") ) {
+		xar_err_new(x);
+		xar_err_set_string(x, "No extracted-checksum");
+		xar_err_callback(x, XAR_SEVERITY_FATAL, XAR_ERR_ARCHIVE_EXTRACTION);
+		return -1;
+	}
+
+	if( !opt )
 		opt = xar_opt_get(x, XAR_OPT_FILECKSUM);
 
 	if( !opt || (0 == strcmp(opt, XAR_OPT_VAL_NONE) ) )
@@ -308,7 +328,7 @@ int32_t xar_hash_toheap_done(xar_t x, xar_file_t f, xar_prop_t p, void **context
 		
 	str = _xar_format_hash(unarchived_hash, unarchived_length);
 	if( f ) {
-		tmpp = xar_prop_pset(f, p, "unarchived-checksum", str);
+		tmpp = xar_prop_pset(f, p, "extracted-checksum", str);
 		if( tmpp )
 			xar_attr_pset(f, tmpp, "style", unarchived_style);
 	}

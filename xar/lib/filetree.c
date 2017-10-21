@@ -53,6 +53,7 @@
 #include "xar.h"
 #include "filetree.h"
 #include "archive.h"
+#include "util.h"
 #include "b64.h"
 #include "ea.h"
 
@@ -368,13 +369,11 @@ const char *xar_prop_next(xar_iter_t i) {
 
 	if( XAR_PROP(p)->parent ) {
 		char *tmp1, *tmp2;
-		char *dname;
 
 		if( strstr(XAR_ITER(i)->path, "/") ) {
-		tmp1 = tmp2 = XAR_ITER(i)->path;
-		dname = dirname(tmp2);
-		XAR_ITER(i)->path = strdup(dname);
-		free(tmp1);
+			tmp1 = tmp2 = XAR_ITER(i)->path;
+			XAR_ITER(i)->path = xar_safe_dirname(tmp2);
+			free(tmp1);
 		} else {
 			free(XAR_ITER(i)->path);
 			XAR_ITER(i)->path = NULL;
@@ -853,12 +852,10 @@ xar_file_t xar_file_next(xar_iter_t i) {
 
 	if( XAR_FILE(f)->parent ) {
 		char *tmp1, *tmp2;
-		char *dname;
 
 		if( strstr(XAR_ITER(i)->path, "/") ) {
 			tmp1 = tmp2 = XAR_ITER(i)->path;
-			dname = dirname(tmp2);
-			XAR_ITER(i)->path = strdup(dname);
+			XAR_ITER(i)->path = xar_safe_dirname(tmp2);
 			free(tmp1);
 		} else {
 			free(XAR_ITER(i)->path);
@@ -938,15 +935,16 @@ void xar_prop_serialize(xar_prop_t p, xmlTextWriterPtr writer) {
 		if( XAR_PROP(i)->value ) {
 			if( strcmp(XAR_PROP(i)->key, "name") == 0 ) {
 				unsigned char *tmp;
-				size_t outlen = strlen(XAR_PROP(i)->value);
+				int outlen = strlen(XAR_PROP(i)->value);
 				int inlen, len;
+
 				inlen = len = outlen;
 
 				tmp = malloc(len);
 				assert(tmp);
 				if( UTF8Toisolat1(tmp, &len, BAD_CAST(XAR_PROP(i)->value), &inlen) < 0 ) {
 					xmlTextWriterWriteAttribute(writer, BAD_CAST("enctype"), BAD_CAST("base64"));
-					xmlTextWriterWriteBase64(writer, XAR_PROP(i)->value, 0, outlen);
+					xmlTextWriterWriteBase64(writer, XAR_PROP(i)->value, 0, strlen(XAR_PROP(i)->value));
 				} else
 					xmlTextWriterWriteString(writer, BAD_CAST(XAR_PROP(i)->value));
 				free(tmp);

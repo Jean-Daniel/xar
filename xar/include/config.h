@@ -18,6 +18,7 @@
 #define HAVE_STRUCT_STATFS_F_FSTYPENAME 1
 #define HAVE_SYS_ACL_H 1
 /* #undef HAVE_LIBUTIL_H */
+#define HAVE_LIBPTHREAD 1
 #define HAVE_ASPRINTF 1
 #define HAVE_LIBBZ2 1
 /* #undef HAVE_LIBLZMA */

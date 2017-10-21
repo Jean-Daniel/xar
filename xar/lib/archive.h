@@ -40,11 +40,18 @@
 #define _XAR_ARCHIVE_H_
 #include <zlib.h>
 #include <libxml/hash.h>
+#ifdef __APPLE__
+#include <CommonCrypto/CommonDigest.h>
+#include "CommonDigestSPI.h"
+#else
+#include <openssl/evp.h>
+#endif
 #include <sys/types.h>
 #include <sys/stat.h>
 #include "xar.h"
 #include "filetree.h"
 #include "hash.h"
+
 
 typedef int (*read_callback)(xar_t, xar_file_t, void *, size_t, void *context);
 typedef int (*write_callback)(xar_t, xar_file_t, void *, size_t, void *context);
@@ -78,7 +85,7 @@ struct __xar_t {
 	                         * between callbacks. */
 	size_t toc_count;       /* current bytes read of the toc */
 	z_stream zs;            /* gz state for compressing/decompressing toc */
-	const char *path_prefix;      /* used for distinguishing absolute paths */
+	char *path_prefix;      /* used for distinguishing absolute paths */
 	err_handler ercallback; /* callback for errors/warnings */
 	struct errctx errctx;   /* error callback context */
 	xar_subdoc_t subdocs;   /* linked list of subdocs */

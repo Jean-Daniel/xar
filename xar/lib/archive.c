@@ -53,6 +53,9 @@
 #include <libxml/xmlwriter.h>
 #include <libxml/xmlreader.h>
 #include <libxml/xmlstring.h>
+#ifdef HAVE_LIBPTHREAD
+#include <pthread.h>
+#endif // HAVE_LIBPTHREAD
 #ifndef HAVE_ASPRINTF
 #include "asprintf.h"
 #endif
@@ -87,6 +90,10 @@
 static int32_t xar_unserialize(xar_t x);
 void xar_serialize(xar_t x, const char *file);
 
+#ifdef HAVE_LIBPTHREAD
+static pthread_mutex_t xar_new_mutex = PTHREAD_MUTEX_INITIALIZER;
+#endif // HAVE_LIBPTHREAD
+
 /* xar_new
  * Returns: newly allocated xar_t structure
  * Summary: just does basicallocation and initialization of 
@@ -108,9 +115,22 @@ static xar_t xar_new(void) {
 	XAR(ret)->zs.zalloc = Z_NULL;
 	XAR(ret)->zs.zfree = Z_NULL;
 	XAR(ret)->zs.opaque = Z_NULL;
+
+	// xmlHashCreate() calls libxml2's random number generator, which is not thread-
+	// safe and can deadlock. Protecting this with a mutex permits multi-threaded use
+	// of xar_open().
+#ifdef HAVE_LIBPTHREAD
+	pthread_mutex_lock(&xar_new_mutex);
+#else
+#warning libpthread unavailable. Potential for deadlock with multithreaded xar_open() use.
+#endif // HAVE_LIBPTHREAD
 	XAR(ret)->ino_hash = xmlHashCreate(0);
 	XAR(ret)->link_hash = xmlHashCreate(0);
 	XAR(ret)->csum_hash = xmlHashCreate(0);
+#ifdef HAVE_LIBPTHREAD
+	pthread_mutex_unlock(&xar_new_mutex);
+#endif // HAVE_LIBPTHREAD
+
 	XAR(ret)->subdocs = NULL;
 	
 	XAR(ret)->attrcopy_to_heap = xar_attrcopy_to_heap;
@@ -197,14 +217,13 @@ xar_t xar_open(const char *file, int32_t flags) {
 		file = "-";
 	XAR(ret)->filename = strdup(file);
 	if( flags ) { // writing
-		char *tmp1, *tmp2, *tmp3, *tmp4;
+		char *tmp1, *tmp2, *tmp4;
 		tmp1 = tmp2 = strdup(file);
-		tmp3 = dirname(tmp2);
-		XAR(ret)->dirname = strdup(tmp3);
+		XAR(ret)->dirname = xar_safe_dirname(tmp2);
 		/* Create the heap file in the directory which will contain
 		 * the target archive.  /tmp or elsewhere may fill up.
 		 */
-		asprintf(&tmp4, "%s/xar.heap.XXXXXX", tmp3);
+		asprintf(&tmp4, "%s/xar.heap.XXXXXX", XAR(ret)->dirname);
 		free(tmp1);
 		if( strcmp(file, "-") == 0 )
 			XAR(ret)->fd = 1;
@@ -276,8 +295,14 @@ xar_t xar_open(const char *file, int32_t flags) {
 			XAR(ret)->toc_hash_ctx = xar_hash_new("sha512", (void *)ret);
 			break;
 		case XAR_CKSUM_MD5:
+#ifdef XAR_SUPPORT_MD5
 			XAR(ret)->toc_hash_ctx = xar_hash_new("md5", (void *)ret);
 			break;
+#else
+			fprintf(stderr, "Archive uses unsafe hashing algorithm (MD5), aborting\n");
+			xar_close(ret);
+			return NULL;
+#endif // XAR_SUPPORT_MD5
 		default:
 			fprintf(stderr, "Unknown hashing algorithm, skipping\n");
 			break;
@@ -311,6 +336,7 @@ xar_t xar_open(const char *file, int32_t flags) {
 				cksum_match = (cksum_style != NULL && strcmp(cksum_style, XAR_OPT_VAL_SHA512) == 0);
 				break;
 			case XAR_CKSUM_MD5:
+				// This is left in place regardless of XAR_SUPPORT_MD5 setting so we can still detect mismatches
 				cksum_match = (cksum_style != NULL && strcmp(cksum_style, XAR_OPT_VAL_MD5) == 0);
 				break;
 			default:
@@ -423,9 +449,9 @@ int xar_close(xar_t x) {
 
 	/* If we're creating an archive */
 	if( XAR(x)->heap_fd != -1 ) {
-		const char *tmpser;
+		char *tmpser;
 		void *rbuf, *wbuf = NULL;
-		int fd, r, off, wbytes;
+		int fd, r, off, wbytes, rbytes;
 		long rsize, wsize;
 		z_stream zs;
 		uint64_t ungztoc, gztoc;
@@ -434,7 +460,7 @@ int xar_close(xar_t x) {
 		struct tm tmptm;
 		time_t t;
 
-		tmpser = (const char *)xar_opt_get(x, XAR_OPT_TOCCKSUM);
+		tmpser = (char *)xar_opt_get(x, XAR_OPT_TOCCKSUM);
 		/* If no checksum type is specified, default to sha1 */
 		if( !tmpser ) tmpser = XAR_OPT_VAL_SHA1;
 
@@ -458,12 +484,14 @@ int xar_close(xar_t x) {
 				xar_attr_set(XAR_FILE(x), "checksum", "style", XAR_OPT_VAL_SHA512);
 				xar_prop_set(XAR_FILE(x), "checksum/size", "64");
 			}
+#ifdef XAR_SUPPORT_MD5
 			if( strcmp(tmpser, XAR_OPT_VAL_MD5) == 0 ) {
 				XAR(x)->toc_hash_ctx = xar_hash_new("md5", (void *)x);
 				XAR(x)->header.cksum_alg = htonl(XAR_CKSUM_MD5);
 				xar_attr_set(XAR_FILE(x), "checksum", "style", XAR_OPT_VAL_MD5);
 				xar_prop_set(XAR_FILE(x), "checksum/size", "16");
 			}
+#endif // XAR_SUPPORT_MD5
 
 			xar_prop_set(XAR_FILE(x), "checksum/offset", "0");
 		} else {
@@ -477,16 +505,15 @@ int xar_close(xar_t x) {
 		xar_prop_set(XAR_FILE(x), "creation-time", timestr);
 		
 		/* serialize the toc to a tmp file */
-    char *tmpfile;
-		asprintf(&tmpfile, "%s/xar.toc.XXXXXX", XAR(x)->dirname);
-		fd = mkstemp(tmpfile);
-		xar_serialize(x, tmpfile);
-		unlink(tmpfile);
-		free(tmpfile);
-		asprintf(&tmpfile, "%s/xar.toc.XXXXXX", XAR(x)->dirname);
-		tocfd = mkstemp(tmpfile);
-		unlink(tmpfile);
-		free(tmpfile);
+		asprintf(&tmpser, "%s/xar.toc.XXXXXX", XAR(x)->dirname);
+		fd = mkstemp(tmpser);
+		xar_serialize(x, tmpser);
+		unlink(tmpser);
+		free(tmpser);
+		asprintf(&tmpser, "%s/xar.toc.XXXXXX", XAR(x)->dirname);
+		tocfd = mkstemp(tmpser);
+		unlink(tmpser);
+		free(tmpser);
 		
 	
 		/* read the toc from the tmp file, compress it, and write it
@@ -747,7 +774,7 @@ const char *xar_opt_get(xar_t x, const char *option) {
  * Returns: 0 for sucess, -1 for failure
  */
 int32_t xar_opt_set(xar_t x, const char *option, const char *value) {
-	xar_attr_t a;
+	xar_attr_t currentAttr, a;
 
 	if( (strcmp(option, XAR_OPT_TOCCKSUM) == 0) ) {
 		XAR(x)->heap_offset = xar_io_get_toc_checksum_length_for_type(value);
@@ -1366,13 +1393,14 @@ int32_t xar_extract(xar_t x, xar_file_t f) {
 	
 	if( (strstr(XAR_FILE(f)->fspath, "/") != NULL) && (stat(XAR_FILE(f)->fspath, &sb)) && (XAR_FILE(f)->parent_extracted == 0) ) {
 		tmp1 = strdup(XAR_FILE(f)->fspath);
-		dname = dirname(tmp1);
+		dname = xar_safe_dirname(tmp1);
 		tmpf = xar_file_find(XAR(x)->files, dname);
 		if( !tmpf ) {
 			xar_err_set_string(x, "Unable to find file");
 			xar_err_callback(x, XAR_SEVERITY_NONFATAL, XAR_ERR_ARCHIVE_EXTRACTION);
 			return -1;
 		}
+		free(dname);
 		free(tmp1);
 		XAR_FILE(f)->parent_extracted++;
 		xar_extract(x, tmpf);
@@ -1380,6 +1408,11 @@ int32_t xar_extract(xar_t x, xar_file_t f) {
 	
 	return xar_extract_tofile(x, f, XAR_FILE(f)->fspath);
 }
+
+int32_t xar_verify_progress(xar_t x, xar_file_t f, xar_progress_callback p) {
+	return xar_arcmod_verify(x,f, p);
+}
+
 
 /* xar_verify
 * x: archive to extract from
@@ -1390,7 +1423,7 @@ int32_t xar_extract(xar_t x, xar_file_t f) {
 * the verification will pass.
 */
 int32_t xar_verify(xar_t x, xar_file_t f) {
-	return xar_arcmod_verify(x,f);
+	return xar_arcmod_verify(x,f, NULL);
 }
 
 /* toc_read_callback
@@ -1544,7 +1577,8 @@ static int32_t xar_unserialize(xar_t x) {
 						return -1;
 					}
 				} else {
-					xar_subdoc_t s;
+					xar_subdoc_t s = NULL;
+					xar_attr_t a = NULL;
 					int i;
 
 					prefix = xmlTextReaderPrefix(reader);
@@ -1553,24 +1587,26 @@ static int32_t xar_unserialize(xar_t x) {
 					i = xmlTextReaderAttributeCount(reader);
 					if( i > 0 ) {
 						for(i = xmlTextReaderMoveToFirstAttribute(reader); i == 1; i = xmlTextReaderMoveToNextAttribute(reader)) {
-							xar_attr_t a;
 							const char *aname = (const char *)xmlTextReaderConstLocalName(reader);
 							const char *avalue = (const char *)xmlTextReaderConstValue(reader);
 							
 							if( aname && (strcmp("subdoc_name", aname) == 0) ) {
 								name = (const unsigned char *)avalue;
 							} else {
+								xar_attr_t next = a;
 								a = xar_attr_new();
 								XAR_ATTR(a)->key = strdup(aname);
 								XAR_ATTR(a)->value = strdup(avalue);
-								XAR_ATTR(a)->next = XAR_SUBDOC(s)->attrs;
-								XAR_SUBDOC(s)->attrs = XAR_ATTR(a);
+								XAR_ATTR(a)->next = next;
 							}
 						}
 					}
 
 					s = xar_subdoc_new(x, (const char *)name);
                     if(s){
+                        if(a){
+                            XAR_SUBDOC(s)->attrs = XAR_ATTR(a);
+                        }
                         xar_subdoc_unserialize(s, reader);
                     }else{
                         xmlFreeTextReader(reader);

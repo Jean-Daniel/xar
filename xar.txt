@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005-2007 Rob Braun
+ * Copyright (c) 2005 Rob Braun
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -28,32 +28,8 @@
  */
 /*
  * 03-Apr-2005
- * DRI: Rob Braun <bbraun@synack.net>
+ * DRI: Rob Braun <bbraun@opendarwin.org>
  */
 /*
- * Portions Copyright 2006, Apple Computer, Inc.
- * Christopher Ryan <ryanc@apple.com>
- */
-
-
-#ifndef _XAR_ARCMOD_H_
-#define _XAR_ARCMOD_H_
-#include "xar.h"
-#include "filetree.h"
-
-
-typedef int32_t (*arcmod_archive)(xar_t x, xar_file_t f, const char* file, const char *buffer, size_t len);
-typedef int32_t (*arcmod_extract)(xar_t x, xar_file_t f, const char* file, char *buffer, size_t len);
-
-struct arcmod {
-	arcmod_archive archive;
-	arcmod_extract extract;
-};
-
-int32_t xar_arcmod_archive(xar_t x, xar_file_t f, const char *file, const char *buffer, size_t len);
-int32_t xar_arcmod_extract(xar_t x, xar_file_t f, const char *file, char *buffer, size_t len);
-
-int32_t xar_arcmod_verify(xar_t x, xar_file_t f, xar_progress_callback p);
-int32_t xar_check_prop(xar_t x, const char *name);
-
-#endif /* _XAR_ARCMOD_H_ */
+ * Portions Copyright (c) 2006 Apple Computer, Inc.	
+*/

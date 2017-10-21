@@ -396,6 +396,14 @@ static int extract(const char *filename, int arglen, char *args[]) {
 
 		char *path = xar_get_path(f);
 
+		// This includes a null check
+		if (!xar_path_issane(path)) {
+			if (Verbose)
+				printf("Warning, not extracting file \"%s\" because it's path is invalid.\n", path);
+			free(path);
+			continue;
+		}
+
 		if( args[0] ) {
 			for(i = extract_files; i != NULL; i = i->next) {
 				int extract_match = 1;
@@ -422,13 +430,6 @@ static int extract(const char *filename, int arglen, char *args[]) {
 			continue;
 		}
 		
-		if (!xar_path_issane(path)) {
-			if (Verbose)
-				printf("Warning, not extracting file \"%s\" because it's path is invalid.\n", path);
-			free(path);
-			continue;
-		}
-		
 		if( matched ) {
 			struct stat sb;
 			if( NoOverwrite && (lstat(path, &sb) == 0) ) {
@@ -436,7 +437,7 @@ static int extract(const char *filename, int arglen, char *args[]) {
 			} else {
 				const char *prop = NULL;
 				int deferred = 0;
-				if( xar_prop_get(f, "type", &prop) == 0 ) {
+				if( xar_prop_get(f, "type", &prop) == 0 && prop != NULL ) {
 					if( strcmp(prop, "directory") == 0 ) {
 						struct lnode *tmpl = calloc(sizeof(struct lnode),1);
 						tmpl->str = (char *)f;
@@ -642,8 +643,13 @@ static int dump_header(const char *filename) {
 		break;
 	case XAR_CKSUM_SHA512: printf("(SHA512)\n");
 		break;
+#ifdef XAR_SUPPORT_MD5
 	case XAR_CKSUM_MD5: printf("(MD5)\n");
-	                    break;
+		break;
+#else
+	case XAR_CKSUM_MD5: printf("(unsupported (MD5))\n");
+            break;
+#endif // XAR_SUPPORT_MD5
 	default: printf("(unknown)\n");
 	         break;
 	};
@@ -718,11 +724,19 @@ static void usage(const char *prog) {
 	fprintf(stderr, "\t-P               On extract, set ownership based on uid/gid.\n");
 	fprintf(stderr, "\t--toc-cksum      Specifies the hashing algorithm to use for\n");
 	fprintf(stderr, "\t                      xml header verification.\n");
+#ifdef XAR_SUPPORT_MD5
 	fprintf(stderr, "\t                      Valid values: none, md5, sha1, sha256, and sha512\n");
+#else
+	fprintf(stderr, "\t                      Valid values: none, sha1, sha256, and sha512\n");
+#endif // XAR_SUPPORT_MD5
 	fprintf(stderr, "\t                      Default: sha1\n");
 	fprintf(stderr, "\t--file-cksum     Specifies the hashing algorithm to use for\n");
 	fprintf(stderr, "\t                      file content verification.\n");
+#ifdef XAR_SUPPORT_MD5
 	fprintf(stderr, "\t                      Valid values: none, md5, sha1, sha256, and sha512\n");
+#else
+	fprintf(stderr, "\t                      Valid values: none, sha1, sha256, and sha512\n");
+#endif
 	fprintf(stderr, "\t                      Default: sha1\n");
 	fprintf(stderr, "\t--dump-toc=<filename> Has xar dump the xml header into the\n");
 	fprintf(stderr, "\t                      specified file.\n");
@@ -815,10 +829,12 @@ int main(int argc, char *argv[]) {
 				exit(1);
 			}
 			if( (strcmp(optarg, XAR_OPT_VAL_NONE) != 0) &&
+#ifdef XAR_SUPPORT_MD5
+				(strcmp(optarg, XAR_OPT_VAL_MD5) != 0) &&
+#endif // XAR_SUPPORT_MD5
 				(strcmp(optarg, XAR_OPT_VAL_SHA1) != 0) &&
 				(strcmp(optarg, XAR_OPT_VAL_SHA256) != 0) &&
-				(strcmp(optarg, XAR_OPT_VAL_SHA512) != 0) &&
-				(strcmp(optarg, XAR_OPT_VAL_MD5)  != 0) ) {
+				(strcmp(optarg, XAR_OPT_VAL_SHA512) != 0) ) {
 				usage(argv[0]);
 				exit(1);
 			}
@@ -830,10 +846,12 @@ int main(int argc, char *argv[]) {
 				exit(1);
 			}
 			if( (strcmp(optarg, XAR_OPT_VAL_NONE) != 0) &&
+#ifdef XAR_SUPPORT_MD5
+			   (strcmp(optarg, XAR_OPT_VAL_MD5) != 0) &&
+#endif // XAR_SUPPORT_MD5
 			   (strcmp(optarg, XAR_OPT_VAL_SHA1) != 0) &&
 			   (strcmp(optarg, XAR_OPT_VAL_SHA256) != 0) &&
-			   (strcmp(optarg, XAR_OPT_VAL_SHA512) != 0) &&
-			   (strcmp(optarg, XAR_OPT_VAL_MD5)  != 0) ) {
+			   (strcmp(optarg, XAR_OPT_VAL_SHA512) != 0) ) {
 				usage(argv[0]);
 				exit(1);
 			}
